@@ -1,0 +1,6 @@
+profile,ratio_min,ratio_max,allowed_categories,default_material,default_finish,size_candidates_cm,notes
+portrait_standard,0.00,0.89,"canvas_large|canvas_small|paper",fine_art_paper,matte,"21x30|30x40|50x70|70x100",Portrait works with standard print sizes.
+square_standard,0.90,1.10,"canvas_large|canvas_small|paper",fine_art_paper,matte,"20x20|30x30|50x50",Square works.
+landscape_standard,1.11,9.99,"canvas_large|canvas_small|paper",fine_art_paper,matte,"30x21|40x30|70x50|100x70",Landscape works.
+canvas_priority,0.00,9.99,"canvas_large|canvas_small",canvas,none,"30x40|50x70|70x100",Use when the work should stay canvas-like.
+manual_review,0.00,9.99,other,manual,manual,manual,Non-standard works or files that need review.

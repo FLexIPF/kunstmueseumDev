@@ -1,0 +1,131 @@
+{
+  "id": "luca",
+  "slug": "luca-schweiger",
+  "name": "Luca Schweiger",
+  "bioPdf": "",
+  "bioMarkdown": "Arbeiten von Luca Schweiger.",
+  "contact": {
+    "email": "lschweiger03@gmail.com"
+  },
+  "rooms": [
+    {
+      "id": "room-01",
+      "title": "Luca Room 1",
+      "theme": "modern",
+      "length": 24,
+      "width": 24,
+      "height": 7.4,
+      "accentColor": "#b7b0a6",
+      "categoryFilter": ["paper", "other"],
+      "maxArtworks": 8,
+      "wallTexture": "/backgrounds/room1-a.jpg",
+      "wallTextureAlt": "/backgrounds/room1-b.jpg",
+      "floorTexture": "/backgrounds/room1-floor.jpg",
+      "ceilingTexture": "/backgrounds/nacht-decke.png"
+    }
+  ],
+  "artworks": [
+    {
+      "title": "Gelbes Cover",
+      "image": "/artist/luca/images/01_Gelbes_Cover.jpg.jpg",
+      "year": 2025,
+      "medium": "mixed media auf Papier",
+      "widthCm": 41,
+      "heightCm": 59,
+      "category": "paper",
+      "status": "available",
+      "priceEur": 600
+    },
+    {
+      "title": "Schmales Gesicht auf blau",
+      "image": "/artist/luca/images/02_Schmales_Gesicht_auf_blau.jpg.jpg",
+      "year": 2025,
+      "medium": "Acryl auf Papier",
+      "widthCm": 60,
+      "heightCm": 75,
+      "category": "paper",
+      "status": "available",
+      "priceEur": 675
+    },
+    {
+      "title": "Figuren in der Masse",
+      "image": "/artist/luca/images/03_Figuren_in_der_Masse.jpg.jpg",
+      "year": 2025,
+      "medium": "Acryl auf Papier",
+      "widthCm": 59,
+      "heightCm": 99,
+      "category": "paper",
+      "status": "available",
+      "priceEur": 630
+    },
+    {
+      "title": "Vorhang",
+      "image": "/artist/luca/images/04_Vorhang.jpg.jpg",
+      "year": 2026,
+      "medium": "Acryl auf Holz",
+      "widthCm": 157,
+      "heightCm": 140,
+      "category": "other",
+      "status": "available",
+      "priceEur": 700
+    },
+    {
+      "title": "Expressreihe 1",
+      "image": "/artist/luca/images/05_Expressreihe_1.jpg.jpg",
+      "year": 2026,
+      "medium": "Acryl auf Papier",
+      "widthCm": 30,
+      "heightCm": 38,
+      "category": "paper",
+      "status": "available",
+      "priceEur": 350
+    },
+    {
+      "title": "Expressreihe 2",
+      "image": "/artist/luca/images/06_Expressreihe_2.jpg.jpg",
+      "year": 2026,
+      "medium": "Acryl auf Papier",
+      "widthCm": 30,
+      "heightCm": 38,
+      "category": "paper",
+      "status": "available",
+      "priceEur": 350
+    },
+    {
+      "title": "Homunkulus",
+      "image": "/artist/luca/images/07_Homunkulus.jpg.jpg",
+      "year": 2026,
+      "medium": "Acryl auf Papier",
+      "widthCm": 60,
+      "heightCm": 75,
+      "category": "paper",
+      "status": "available",
+      "priceEur": 620
+    },
+    {
+      "title": "Wiederkehr",
+      "image": "/artist/luca/images/08_Wiederkehr.jpg.jpg",
+      "year": 2026,
+      "medium": "Acryl auf Papier",
+      "widthCm": 30,
+      "heightCm": 38,
+      "category": "paper",
+      "status": "available",
+      "priceEur": 350
+    },
+    {
+      "id": "luca-portrait-1",
+      "title": "Portrait",
+      "image": "/artist/luca/images/Künstlerpic.jpeg",
+      "category": "other",
+      "status": "available"
+    },
+    {
+      "id": "luca-portrait-2",
+      "title": "Portrait 2",
+      "image": "/artist/luca/images/fit inspiration für avatar.jpeg",
+      "category": "other",
+      "status": "available"
+    }
+  ]
+}

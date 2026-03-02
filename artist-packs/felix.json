@@ -1,0 +1,96 @@
+{
+  "id": "felix",
+  "slug": "felix-ipfling",
+  "name": "Felix Ipfling",
+  "bioPdf": "/artist/felix-ipfling-kurzportrait-2024-09.pdf",
+  "bioMarkdown": "Leinwandarbeiten aus dem Felix-Portfolio.",
+  "contact": {
+    "phone": "0176 21196733",
+    "email": "felix@ipfling.de",
+    "website": "https://felix-ipfling.de",
+    "instagram": "https://instagram.com/felix.ipfling"
+  },
+  "links": [
+    { "label": "Website", "href": "https://felix-ipfling.de" },
+    { "label": "Instagram", "href": "https://instagram.com/felix.ipfling" }
+  ],
+  "exhibitions": [],
+  "rooms": [
+    {
+      "id": "room-01",
+      "title": "Felix Room 1",
+      "theme": "loft",
+      "length": 24,
+      "width": 24,
+      "height": 7.4,
+      "accentColor": "#caa563",
+      "categoryFilter": ["canvas_large", "canvas_small", "paper", "other"],
+      "maxArtworks": 10,
+      "wallTexture": "/backgrounds/room1-a.jpg",
+      "wallTextureAlt": "/backgrounds/room1-b.jpg",
+      "floorTexture": "/backgrounds/room1-floor.jpg",
+      "ceilingTexture": "/backgrounds/nacht-decke.png"
+    },
+    {
+      "id": "room-02",
+      "title": "Felix Room 2",
+      "theme": "modern",
+      "length": 24,
+      "width": 24,
+      "height": 7.4,
+      "accentColor": "#8fd3ff",
+      "categoryFilter": ["canvas_large", "canvas_small", "paper", "other"],
+      "maxArtworks": 10,
+      "wallTexture": "/backgrounds/room3-a.jpg",
+      "wallTextureAlt": "/backgrounds/room3-b.jpg",
+      "floorTexture": "/backgrounds/room3-floor.jpg",
+      "ceilingTexture": "/backgrounds/nacht-decke.png"
+    },
+    {
+      "id": "room-03",
+      "title": "Felix Room 3",
+      "theme": "castle",
+      "length": 24,
+      "width": 24,
+      "height": 7.4,
+      "accentColor": "#d6b45c",
+      "categoryFilter": ["canvas_large", "canvas_small", "paper", "other"],
+      "maxArtworks": 10,
+      "wallTexture": "/backgrounds/room2-a.jpg",
+      "wallTextureAlt": "/backgrounds/room2-b.jpg",
+      "floorTexture": "/backgrounds/room2-floor.jpg",
+      "ceilingTexture": "/backgrounds/nacht-decke.png"
+    },
+    {
+      "id": "room-04",
+      "title": "Felix Room 4",
+      "theme": "loft",
+      "length": 24,
+      "width": 24,
+      "height": 7.4,
+      "accentColor": "#caa563",
+      "categoryFilter": ["canvas_large", "canvas_small", "paper", "other"],
+      "maxArtworks": 10,
+      "wallTexture": "/backgrounds/room1-a.jpg",
+      "wallTextureAlt": "/backgrounds/room1-b.jpg",
+      "floorTexture": "/backgrounds/room1-floor.jpg",
+      "ceilingTexture": "/backgrounds/nacht-decke.png"
+    },
+    {
+      "id": "room-05",
+      "title": "Felix Room 5",
+      "theme": "modern",
+      "length": 24,
+      "width": 24,
+      "height": 7.4,
+      "accentColor": "#8fd3ff",
+      "categoryFilter": ["canvas_large", "canvas_small", "paper", "other"],
+      "maxArtworks": 10,
+      "wallTexture": "/backgrounds/room3-a.jpg",
+      "wallTextureAlt": "/backgrounds/room3-b.jpg",
+      "floorTexture": "/backgrounds/room3-floor.jpg",
+      "ceilingTexture": "/backgrounds/nacht-decke.png"
+    }
+  ],
+  "artworks": []
+}

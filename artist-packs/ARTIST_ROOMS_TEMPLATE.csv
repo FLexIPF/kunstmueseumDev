@@ -1,0 +1,3 @@
+room_id,room_title,theme,wall_a,wall_b,floor,ceiling,notes
+room-1,Raum 1 (Beispiel),loft,room-1-wall-a.jpg,room-1-wall-b.jpg,room-1-floor.jpg,room-1-ceiling.jpg,Avatar-Position: links neben Eingang
+room-2,Raum 2 (optional),modern,room-2-wall-a.jpg,room-2-wall-b.jpg,room-2-floor.jpg,room-2-ceiling.jpg,

@@ -1,0 +1,24 @@
+{
+  "id": "example-room",
+  "slug": "example-room",
+  "name": "Example Room",
+  "bioMarkdown": "Leerer Beispielraum fuer Kuenstlerbewerbungen.",
+  "rooms": [
+    {
+      "id": "example-room",
+      "title": "Example Room",
+      "theme": "modern",
+      "length": 24,
+      "width": 24,
+      "height": 7.4,
+      "accentColor": "#7fc9ff",
+      "categoryFilter": ["canvas_large", "canvas_small", "paper", "other"],
+      "maxArtworks": 0,
+      "wallTexture": "/backgrounds/room1-a.jpg",
+      "wallTextureAlt": "/backgrounds/room1-b.jpg",
+      "floorTexture": "/backgrounds/room1-floor.jpg",
+      "ceilingTexture": "/backgrounds/nacht-decke.png"
+    }
+  ],
+  "artworks": []
+}
