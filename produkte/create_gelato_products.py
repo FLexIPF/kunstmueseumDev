@@ -8,6 +8,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import math
 from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
@@ -19,6 +20,8 @@ CSV_PATH = REPO_ROOT / "produkte/gelato_jobs.csv"
 LOG_PATH = REPO_ROOT / "produkte/gelato_created_products.csv"
 ASSET_DIR = REPO_ROOT / "public/gelato-assets"
 API_BASE_URL = "https://ecommerce.gelatoapis.com/v1"
+SQUARE_EPSILON = 0.04
+DEFAULT_MAX_CROP_PER_SIDE = 0.05
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -38,18 +41,86 @@ class Config:
     template_id: str
 
 
+@dataclass(frozen=True)
+class TemplateRun:
+    key: str
+    template_id: str
+    title_suffix: str
+    description_label: str
+    fit_method: str
+    variant_mode: str
+
+
+@dataclass
+class VariantDebugRow:
+    variant_id: str
+    variant_title: str
+    placeholder_name: str
+    placeholder_width: float
+    placeholder_height: float
+    variant_ratio: float | None
+    variant_orientation: str
+    crop_per_side: float
+    ratio_distance: float
+    orientation_match: bool
+    selected: bool = False
+
+
+PROFILE_DEFAULTS: dict[str, dict[str, str]] = {
+    "poster": {
+        "title_suffix": "Poster",
+        "description_label": "Poster",
+        "fit_method": "slice",
+        "variant_mode": "ratio_cover",
+    },
+    "framed": {
+        "title_suffix": "Kunstdruck mit Rahmen",
+        "description_label": "Kunstdruck mit Rahmen",
+        "fit_method": "slice",
+        "variant_mode": "ratio_cover",
+    },
+    "canvas": {
+        "title_suffix": "Leinwanddruck",
+        "description_label": "Leinwanddruck",
+        "fit_method": "slice",
+        "variant_mode": "ratio_cover",
+    },
+    "tshirt": {
+        "title_suffix": "T-Shirt",
+        "description_label": "T-Shirt",
+        "fit_method": "meet",
+        "variant_mode": "all",
+    },
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create Gelato products from produkte/gelato_jobs.csv")
     parser.add_argument("--csv", default=str(CSV_PATH), help="Path to gelato_jobs.csv")
     parser.add_argument("--log", default=str(LOG_PATH), help="Path to CSV log output")
     parser.add_argument("--artist", help="Only process one artist_id")
     parser.add_argument("--limit", type=int, help="Process only the first N rows after filtering")
+    parser.add_argument("--sample-diverse", type=int, help="Pick N artworks with different aspect ratios")
     parser.add_argument("--apply", action="store_true", help="Actually create products via Gelato API")
     parser.add_argument("--force", action="store_true", help="Create even if artwork_id already exists in Gelato tags")
-    parser.add_argument("--fit-method", default="meet", choices=["meet", "fill"], help="How Gelato should fit the artwork into the template placeholder")
+    parser.add_argument("--fit-method", choices=["slice", "meet"], help="Override the profile-specific Gelato fit method")
+    parser.add_argument(
+        "--max-crop-per-side",
+        type=float,
+        default=DEFAULT_MAX_CROP_PER_SIDE,
+        help="Maximum allowed crop per edge/side when filling a poster variant (default: 0.05 = 5%%)",
+    )
     parser.add_argument("--skip-asset-prepare", action="store_true", help="Do not create/copy public gelato-assets files before building requests")
     parser.add_argument("--template-id", help="Override GELATO_TEMPLATE_ID for this run")
+    parser.add_argument(
+        "--template-profile",
+        action="append",
+        help="Repeatable template selection in the form profile=templateId, e.g. poster=<uuid>, framed=<uuid>, tshirt=<uuid>, canvas=<uuid>",
+    )
     parser.add_argument("--public-file-base-url", help="Override GELATO_PUBLIC_FILE_BASE_URL for this run, e.g. https://your-domain.com")
+    parser.add_argument("--live-template-preview", action="store_true", help="Fetch real Gelato template data even in dry-run mode")
+    parser.add_argument("--debug-variants", action="store_true", help="Print selected variant metrics for each artwork/template")
+    parser.add_argument("--debug-variants-csv", help="Optional CSV path for full variant debug output")
     return parser.parse_args()
 
 
@@ -82,13 +153,14 @@ def load_config(args: argparse.Namespace) -> Config:
     store_id = env_get("GELATO_STORE_ID", loaded)
     public_file_base_url = args.public_file_base_url or env_get("GELATO_PUBLIC_FILE_BASE_URL", loaded) or env_get("GELATO_FILE_BASE_URL", loaded)
     template_id = args.template_id or env_get("GELATO_TEMPLATE_ID", loaded)
+    require_template_id = not (args.template_profile or [])
     missing = [
         name
         for name, value in [
             ("GELATO_API_KEY", api_key),
             ("GELATO_STORE_ID", store_id),
             ("GELATO_PUBLIC_FILE_BASE_URL", public_file_base_url),
-            ("GELATO_TEMPLATE_ID", template_id),
+            *([("GELATO_TEMPLATE_ID", template_id)] if require_template_id else []),
         ]
         if not value
     ]
@@ -146,11 +218,90 @@ def load_jobs(csv_path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def choose_template_id(row: dict[str, str], config: Config) -> str:
-    _ = row
-    if config.template_id:
-        return config.template_id
-    raise RuntimeError("No Gelato template configured")
+def normalize_profile_key(value: str) -> str:
+    key = value.strip().casefold().replace("_", "-").replace(" ", "-")
+    aliases = {
+        "framed-art-print": "framed",
+        "framed-print": "framed",
+        "gerahmt": "framed",
+        "kunstdruck-mit-rahmen": "framed",
+        "art-print": "poster",
+        "shirt": "tshirt",
+        "t-shirt": "tshirt",
+        "tee": "tshirt",
+    }
+    return aliases.get(key, key)
+
+
+def build_template_runs(args: argparse.Namespace, config: Config) -> list[TemplateRun]:
+    raw_profiles = args.template_profile or []
+    profiles: list[TemplateRun] = []
+
+    if raw_profiles:
+        for raw_profile in raw_profiles:
+            if "=" not in raw_profile:
+                raise SystemExit(f"Invalid --template-profile value '{raw_profile}'. Expected profile=<template-id>.")
+            raw_key, template_id = raw_profile.split("=", 1)
+            key = normalize_profile_key(raw_key)
+            defaults = PROFILE_DEFAULTS.get(key)
+            if defaults is None:
+                raise SystemExit(f"Unknown template profile '{raw_key}'. Allowed: {', '.join(sorted(PROFILE_DEFAULTS))}")
+            profiles.append(
+                TemplateRun(
+                    key=key,
+                    template_id=template_id.strip(),
+                    title_suffix=defaults["title_suffix"],
+                    description_label=defaults["description_label"],
+                    fit_method=args.fit_method or defaults["fit_method"],
+                    variant_mode=defaults["variant_mode"],
+                )
+            )
+    else:
+        if not config.template_id:
+            raise RuntimeError("No Gelato template configured")
+        defaults = PROFILE_DEFAULTS["poster"]
+        profiles.append(
+            TemplateRun(
+                key="poster",
+                template_id=config.template_id,
+                title_suffix=defaults["title_suffix"],
+                description_label=defaults["description_label"],
+                fit_method=args.fit_method or defaults["fit_method"],
+                variant_mode=defaults["variant_mode"],
+            )
+        )
+
+    return profiles
+
+
+def select_diverse_rows(rows: list[dict[str, str]], count: int) -> list[dict[str, str]]:
+    if count <= 0 or len(rows) <= count:
+        return rows
+
+    ranked = sorted(rows, key=lambda row: (artwork_ratio(row), (row.get("artist_id") or "").strip(), (row.get("title") or "").strip().casefold()))
+    selected: list[dict[str, str]] = []
+    used_indices: set[int] = set()
+
+    def claim_index(target_index: int) -> int:
+        if target_index not in used_indices:
+            used_indices.add(target_index)
+            return target_index
+        for offset in range(1, len(ranked)):
+            lower = target_index - offset
+            upper = target_index + offset
+            if lower >= 0 and lower not in used_indices:
+                used_indices.add(lower)
+                return lower
+            if upper < len(ranked) and upper not in used_indices:
+                used_indices.add(upper)
+                return upper
+        raise RuntimeError("Could not select enough diverse sample rows")
+
+    for sample_index in range(count):
+        target = round(sample_index * (len(ranked) - 1) / max(1, count - 1))
+        selected.append(ranked[claim_index(target)])
+
+    return selected
 
 
 def normalize_public_route(row: dict[str, str]) -> str:
@@ -239,13 +390,25 @@ def list_existing_products(config: Config) -> list[dict[str, Any]]:
     return products
 
 
-def existing_artwork_ids(products: list[dict[str, Any]]) -> set[str]:
+def existing_product_keys(products: list[dict[str, Any]]) -> set[str]:
     out: set[str] = set()
     for product in products:
         tags = product.get("tags") or []
+        artwork_id = ""
+        product_profile = ""
         for tag in tags:
-            if isinstance(tag, str) and tag.startswith("artwork_id:"):
+            if not isinstance(tag, str):
+                continue
+            if tag.startswith("product_key:"):
                 out.add(tag.split(":", 1)[1])
+            elif tag.startswith("artwork_id:"):
+                artwork_id = tag.split(":", 1)[1]
+            elif tag.startswith("product_profile:"):
+                product_profile = tag.split(":", 1)[1]
+        if artwork_id and product_profile:
+            out.add(f"{artwork_id}:{product_profile}")
+        elif artwork_id:
+            out.add(f"{artwork_id}:poster")
     return out
 
 
@@ -265,20 +428,212 @@ def collect_placeholder_names(template: dict[str, Any]) -> list[str]:
     return names
 
 
-def build_product_title(row: dict[str, str]) -> str:
+def parse_number(value: str) -> float | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return float(value.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def artwork_ratio(row: dict[str, str]) -> float:
+    width = parse_number(row.get("width_cm") or "")
+    height = parse_number(row.get("height_cm") or "")
+    if not width or not height:
+        raise RuntimeError(f"Missing width/height for artwork {row.get('artwork_id')}")
+    return width / height
+
+
+def ratio_orientation(ratio: float) -> str:
+    if abs(ratio - 1.0) <= SQUARE_EPSILON:
+        return "square"
+    return "landscape" if ratio > 1.0 else "portrait"
+
+
+def placeholder_ratio(placeholder: dict[str, Any]) -> float | None:
+    width = placeholder.get("width")
+    height = placeholder.get("height")
+    if not isinstance(width, (int, float)) or not isinstance(height, (int, float)):
+        return None
+    if height == 0:
+        return None
+    return float(width) / float(height)
+
+
+def primary_placeholder(variant: dict[str, Any]) -> dict[str, Any] | None:
+    placeholders = variant.get("imagePlaceholders") or []
+    best: dict[str, Any] | None = None
+    best_area = -1.0
+    for placeholder in placeholders:
+        width = placeholder.get("width")
+        height = placeholder.get("height")
+        if not isinstance(width, (int, float)) or not isinstance(height, (int, float)):
+            continue
+        area = float(width) * float(height)
+        if area > best_area:
+            best = placeholder
+            best_area = area
+    return best
+
+
+def ratio_distance(a: float, b: float) -> float:
+    return abs(math.log(a / b))
+
+
+def variant_sort_key(variant: dict[str, Any]) -> tuple[float, str]:
+    placeholder = primary_placeholder(variant) or {}
+    width = float(placeholder.get("width") or 0.0)
+    height = float(placeholder.get("height") or 0.0)
+    area = width * height
+    title = str(variant.get("title") or "")
+    return (area, title.casefold())
+
+
+def crop_per_side_for_cover(art_ratio: float, variant_ratio: float) -> float:
+    if art_ratio <= 0 or variant_ratio <= 0:
+        return 1.0
+    if abs(art_ratio - variant_ratio) <= 1e-9:
+        return 0.0
+    if variant_ratio > art_ratio:
+        visible_fraction = art_ratio / variant_ratio
+    else:
+        visible_fraction = variant_ratio / art_ratio
+    total_crop = max(0.0, 1.0 - visible_fraction)
+    return total_crop / 2.0
+
+
+def collect_variant_debug_rows(row: dict[str, str], template: dict[str, Any]) -> list[VariantDebugRow]:
+    target_ratio = artwork_ratio(row)
+    target_orientation = ratio_orientation(target_ratio)
+    metrics: list[VariantDebugRow] = []
+
+    for variant in template.get("variants") or []:
+        placeholder = primary_placeholder(variant)
+        if not placeholder:
+            continue
+        variant_ratio = placeholder_ratio(placeholder)
+        variant_orientation = ratio_orientation(variant_ratio) if variant_ratio is not None else "unknown"
+        orientation_match = False
+        crop_per_side = 1.0
+        distance = 999.0
+        if variant_ratio is not None:
+            orientation_match = (
+                target_orientation == variant_orientation
+                or (target_orientation == "square" and abs(variant_ratio - 1.0) <= 0.08)
+            )
+            crop_per_side = crop_per_side_for_cover(target_ratio, variant_ratio)
+            distance = ratio_distance(target_ratio, variant_ratio)
+        metrics.append(
+            VariantDebugRow(
+                variant_id=str(variant.get("id") or ""),
+                variant_title=str(variant.get("title") or ""),
+                placeholder_name=str(placeholder.get("name") or ""),
+                placeholder_width=float(placeholder.get("width") or 0.0),
+                placeholder_height=float(placeholder.get("height") or 0.0),
+                variant_ratio=variant_ratio,
+                variant_orientation=variant_orientation,
+                crop_per_side=crop_per_side,
+                ratio_distance=distance,
+                orientation_match=orientation_match,
+            )
+        )
+    return metrics
+
+
+def select_matching_variants(
+    row: dict[str, str],
+    template: dict[str, Any],
+    max_crop_per_side: float,
+) -> tuple[list[dict[str, Any]], list[VariantDebugRow]]:
+    metrics = collect_variant_debug_rows(row, template)
+    variants_by_id = {
+        str(variant.get("id") or ""): variant
+        for variant in (template.get("variants") or [])
+        if variant.get("id")
+    }
+    candidates: list[tuple[float, float, VariantDebugRow]] = []
+
+    for metric in metrics:
+        if not metric.variant_id or metric.variant_ratio is None or not metric.orientation_match:
+            continue
+        if metric.crop_per_side <= max_crop_per_side:
+            candidates.append((metric.crop_per_side, metric.ratio_distance, metric))
+
+    if candidates:
+        selected_metrics = [
+            metric
+            for _, _, metric in sorted(
+                candidates,
+                key=lambda item: (
+                    item[0],
+                    item[1],
+                    variant_sort_key(variants_by_id.get(item[2].variant_id, {})),
+                ),
+            )
+        ]
+        selected_ids = {metric.variant_id for metric in selected_metrics}
+        for metric in metrics:
+            metric.selected = metric.variant_id in selected_ids
+        return [variants_by_id[metric.variant_id] for metric in selected_metrics if metric.variant_id in variants_by_id], metrics
+
+    fallback: list[tuple[float, VariantDebugRow]] = []
+    for metric in metrics:
+        if metric.variant_id and metric.variant_ratio is not None:
+            fallback.append((metric.ratio_distance, metric))
+    if not fallback:
+        raise RuntimeError(f"Template {template.get('id')} has no usable variants for artwork {row.get('artwork_id')}")
+
+    best_distance = min(distance for distance, _ in fallback)
+    closest_metrics = [
+        metric
+        for distance, variant in fallback
+        if abs(distance - best_distance) <= 0.003
+        for metric in [variant]
+    ]
+    selected_ids = {metric.variant_id for metric in closest_metrics}
+    for metric in metrics:
+        metric.selected = metric.variant_id in selected_ids
+    selected_variants = [
+        variants_by_id[metric.variant_id]
+        for metric in sorted(
+            closest_metrics,
+            key=lambda metric: variant_sort_key(variants_by_id.get(metric.variant_id, {})),
+        )
+        if metric.variant_id in variants_by_id
+    ]
+    return selected_variants, metrics
+
+
+def select_variants_for_profile(
+    row: dict[str, str],
+    template: dict[str, Any],
+    template_run: TemplateRun,
+    max_crop_per_side: float,
+) -> tuple[list[dict[str, Any]], list[VariantDebugRow]]:
+    if template_run.variant_mode == "all":
+        variants = [variant for variant in (template.get("variants") or []) if variant.get("id") and (variant.get("imagePlaceholders") or [])]
+        if variants:
+            metrics = collect_variant_debug_rows(row, template)
+            selected_ids = {str(variant.get("id") or "") for variant in variants}
+            for metric in metrics:
+                metric.selected = metric.variant_id in selected_ids
+            return sorted(variants, key=variant_sort_key), metrics
+    return select_matching_variants(row, template, max_crop_per_side)
+
+
+def build_product_title(row: dict[str, str], template_run: TemplateRun) -> str:
     artist_id = (row.get("artist_id") or "").strip()
     artist_name = {
         "felix": "Felix Ipfling",
         "luca": "Luca Schweiger",
     }.get(artist_id, artist_id.replace("-", " ").title())
     title = (row.get("title") or "").strip()
-    year = (row.get("year") or "").strip()
-    if year:
-        return f"{artist_name} — {title} ({year})"
-    return f"{artist_name} — {title}"
+    return f"{artist_name} — {title} {template_run.title_suffix}"
 
 
-def build_description(row: dict[str, str]) -> str:
+def build_description(row: dict[str, str], template_run: TemplateRun) -> str:
     parts = []
     title = (row.get("title") or "").strip()
     artist_id = (row.get("artist_id") or "").strip()
@@ -287,7 +642,7 @@ def build_description(row: dict[str, str]) -> str:
     width = (row.get("width_cm") or "").strip()
     height = (row.get("height_cm") or "").strip()
     status = (row.get("status_original") or "").strip()
-    parts.append(f"Print based on the artwork '{title}' by {artist_id}.")
+    parts.append(f"{template_run.description_label} based on the artwork '{title}' by {artist_id}.")
     if year:
         parts.append(f"Year: {year}.")
     if medium:
@@ -301,10 +656,13 @@ def build_description(row: dict[str, str]) -> str:
     return " ".join(parts)
 
 
-def build_tags(row: dict[str, str]) -> list[str]:
+def build_tags(row: dict[str, str], template_run: TemplateRun) -> list[str]:
+    artwork_id = (row.get("artwork_id") or "").strip()
     tags = [
         f"artist:{(row.get('artist_id') or '').strip()}",
-        f"artwork_id:{(row.get('artwork_id') or '').strip()}",
+        f"artwork_id:{artwork_id}",
+        f"product_profile:{template_run.key}",
+        f"product_key:{artwork_id}:{template_run.key}",
         f"category:{(row.get('category') or '').strip()}",
         f"orientation:{(row.get('orientation') or '').strip()}",
     ]
@@ -314,7 +672,36 @@ def build_tags(row: dict[str, str]) -> list[str]:
     return [tag for tag in tags if tag and not tag.endswith(":")]
 
 
-def build_payload(row: dict[str, str], config: Config, template: dict[str, Any], fit_method: str) -> dict[str, Any]:
+def preview_template_for_row(template_id: str, row: dict[str, str]) -> dict[str, Any]:
+    width = parse_number(row.get("width_cm") or "") or 100.0
+    height = parse_number(row.get("height_cm") or "") or 100.0
+    return {
+        "id": template_id,
+        "productType": "Preview",
+        "vendor": "Gelato",
+        "variants": [
+            {
+                "id": "template-variant-preview",
+                "title": "Preview",
+                "imagePlaceholders": [
+                    {
+                        "name": "ImageFront",
+                        "width": width,
+                        "height": height,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def build_payload(
+    row: dict[str, str],
+    config: Config,
+    template: dict[str, Any],
+    template_run: TemplateRun,
+    max_crop_per_side: float,
+) -> tuple[dict[str, Any], list[VariantDebugRow]]:
     template_id = str(template.get("id") or "")
     if not template_id:
         raise RuntimeError(f"Template response missing id for artwork {row.get('artwork_id')}")
@@ -322,41 +709,48 @@ def build_payload(row: dict[str, str], config: Config, template: dict[str, Any],
     if not asset_route:
         raise RuntimeError(f"Row {row.get('artwork_id')} is missing gelato_asset_route")
     file_url = f"{config.public_file_base_url}{asset_route}"
-    placeholder_names = collect_placeholder_names(template)
-    if not placeholder_names:
-        raise RuntimeError(f"Template {template_id} has no image placeholders")
+    selected_variants, variant_metrics = select_variants_for_profile(row, template, template_run, max_crop_per_side)
+    if not selected_variants:
+        raise RuntimeError(f"Template {template_id} has no matching variants for artwork {row.get('artwork_id')}")
 
     variants_payload: list[dict[str, Any]] = []
-    for variant in template.get("variants") or []:
+    for variant in selected_variants:
         variant_id = variant.get("id")
         if not variant_id:
             continue
+        placeholders = variant.get("imagePlaceholders") or []
         variants_payload.append(
             {
                 "templateVariantId": variant_id,
                 "imagePlaceholders": [
                     {
-                        "name": placeholder_name,
+                        "name": str(placeholder.get("name") or ""),
                         "fileUrl": file_url,
-                        "fitMethod": fit_method,
+                        "fitMethod": template_run.fit_method,
                     }
-                    for placeholder_name in placeholder_names
+                    for placeholder in placeholders
+                    if placeholder.get("name")
                 ],
             }
         )
+    if not variants_payload:
+        raise RuntimeError(f"No payload variants remained for artwork {row.get('artwork_id')}")
 
-    return {
-        "title": build_product_title(row),
-        "description": build_description(row),
-        "templateId": template_id,
-        "isVisibleInTheOnlineStore": True,
-        "currency": config.default_currency,
-        "salesChannels": [config.default_sales_channel],
-        "tags": build_tags(row),
-        "productType": str(template.get("productType") or "").strip(),
-        "vendor": str(template.get("vendor") or "").strip(),
-        "variants": variants_payload,
-    }
+    return (
+        {
+            "title": build_product_title(row, template_run),
+            "description": build_description(row, template_run),
+            "templateId": template_id,
+            "isVisibleInTheOnlineStore": True,
+            "currency": config.default_currency,
+            "salesChannels": [config.default_sales_channel],
+            "tags": build_tags(row, template_run),
+            "productType": str(template.get("productType") or "").strip(),
+            "vendor": str(template.get("vendor") or "").strip(),
+            "variants": variants_payload,
+        },
+        variant_metrics,
+    )
 
 
 def ensure_log(path: Path) -> None:
@@ -402,15 +796,115 @@ def append_log(path: Path, row: dict[str, str]) -> None:
         writer.writerow(row)
 
 
+def ensure_variant_debug_log(path: Path) -> None:
+    if path.exists():
+        return
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "artwork_id",
+                "artist_id",
+                "title",
+                "product_profile",
+                "template_id",
+                "variant_id",
+                "variant_title",
+                "placeholder_name",
+                "placeholder_width",
+                "placeholder_height",
+                "variant_ratio",
+                "variant_orientation",
+                "crop_per_side",
+                "ratio_distance",
+                "orientation_match",
+                "selected",
+            ],
+        )
+        writer.writeheader()
+
+
+def append_variant_debug_rows(
+    path: Path,
+    row: dict[str, str],
+    template_run: TemplateRun,
+    metrics: list[VariantDebugRow],
+) -> None:
+    ensure_variant_debug_log(path)
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "artwork_id",
+                "artist_id",
+                "title",
+                "product_profile",
+                "template_id",
+                "variant_id",
+                "variant_title",
+                "placeholder_name",
+                "placeholder_width",
+                "placeholder_height",
+                "variant_ratio",
+                "variant_orientation",
+                "crop_per_side",
+                "ratio_distance",
+                "orientation_match",
+                "selected",
+            ],
+        )
+        for metric in metrics:
+            writer.writerow(
+                {
+                    "artwork_id": (row.get("artwork_id") or "").strip(),
+                    "artist_id": (row.get("artist_id") or "").strip(),
+                    "title": (row.get("title") or "").strip(),
+                    "product_profile": template_run.key,
+                    "template_id": template_run.template_id,
+                    "variant_id": metric.variant_id,
+                    "variant_title": metric.variant_title,
+                    "placeholder_name": metric.placeholder_name,
+                    "placeholder_width": f"{metric.placeholder_width:.4f}",
+                    "placeholder_height": f"{metric.placeholder_height:.4f}",
+                    "variant_ratio": "" if metric.variant_ratio is None else f"{metric.variant_ratio:.6f}",
+                    "variant_orientation": metric.variant_orientation,
+                    "crop_per_side": f"{metric.crop_per_side:.6f}",
+                    "ratio_distance": f"{metric.ratio_distance:.6f}",
+                    "orientation_match": "yes" if metric.orientation_match else "no",
+                    "selected": "yes" if metric.selected else "no",
+                }
+            )
+
+
+def print_variant_debug(row: dict[str, str], template_run: TemplateRun, metrics: list[VariantDebugRow]) -> None:
+    selected_metrics = [metric for metric in metrics if metric.selected]
+    print(
+        f"VARIANT DEBUG: {(row.get('artist_id') or '').strip()} / {(row.get('title') or '').strip()} / {template_run.key} "
+        f"selected={len(selected_metrics)} total={len(metrics)}"
+    )
+    for metric in selected_metrics[:12]:
+        ratio_text = "n/a" if metric.variant_ratio is None else f"{metric.variant_ratio:.3f}"
+        print(
+            "   "
+            f"{metric.variant_title or metric.variant_id} | placeholder={metric.placeholder_width:.0f}x{metric.placeholder_height:.0f} "
+            f"| ratio={ratio_text} | crop/side={metric.crop_per_side * 100:.2f}% | orientation={metric.variant_orientation}"
+        )
+    if len(selected_metrics) > 12:
+        print(f"   ... {len(selected_metrics) - 12} more selected variants")
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(args)
     csv_path = Path(args.csv)
     log_path = Path(args.log)
+    template_runs = build_template_runs(args, config)
 
     rows = load_jobs(csv_path)
     if args.artist:
         rows = [row for row in rows if (row.get("artist_id") or "").strip() == args.artist]
+    if args.sample_diverse:
+        rows = select_diverse_rows(rows, args.sample_diverse)
     if args.limit is not None:
         rows = rows[: args.limit]
 
@@ -422,7 +916,7 @@ def main() -> None:
     if args.apply and not args.force:
         try:
             products = list_existing_products(config)
-            existing_ids = existing_artwork_ids(products)
+            existing_ids = existing_product_keys(products)
         except Exception as exc:
             print(
                 "WARNING: Could not list existing Gelato products. "
@@ -437,6 +931,11 @@ def main() -> None:
 
     print(f"Mode: {mode}")
     print(f"Rows selected: {len(rows)}")
+    print("Template runs:", ", ".join(f"{template_run.key}={template_run.template_id}" for template_run in template_runs))
+    for row in rows:
+        width = (row.get("width_cm") or "").strip()
+        height = (row.get("height_cm") or "").strip()
+        print(f" - sample: {(row.get('artist_id') or '').strip()} / {(row.get('title') or '').strip()} / {width}x{height} cm")
     if args.apply and not args.force:
         print(f"Existing Gelato artwork_ids detected: {len(existing_ids)}")
 
@@ -448,88 +947,97 @@ def main() -> None:
         artwork_id = (row.get("artwork_id") or "").strip()
         artist_id = (row.get("artist_id") or "").strip()
         title = (row.get("title") or "").strip()
-        try:
-            if artwork_id in existing_ids and not args.force:
-                skipped += 1
-                append_log(
-                    log_path,
-                    {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "mode": mode,
-                        "status": "skipped_existing",
-                        "artwork_id": artwork_id,
-                        "artist_id": artist_id,
-                        "title": title,
-                        "template_id": "",
-                        "file_url": build_file_url_from_public_route(row, config),
-                        "gelato_product_id": "",
-                        "notes": "artwork_id tag already exists in Gelato",
-                    },
-                )
-                print(f"SKIP existing: {artist_id} / {title}")
-                continue
+        for template_run in template_runs:
+            product_key = f"{artwork_id}:{template_run.key}"
+            try:
+                if product_key in existing_ids and not args.force:
+                    skipped += 1
+                    append_log(
+                        log_path,
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "mode": mode,
+                            "status": "skipped_existing",
+                            "artwork_id": artwork_id,
+                            "artist_id": artist_id,
+                            "title": title,
+                            "template_id": template_run.template_id,
+                            "file_url": build_file_url_from_public_route(row, config),
+                            "gelato_product_id": "",
+                            "notes": f"product_key already exists in Gelato: {product_key}",
+                        },
+                    )
+                    print(f"SKIP existing: {artist_id} / {title} / {template_run.key}")
+                    continue
 
-            template_id = choose_template_id(row, config)
-            template = get_template(template_id, config, template_cache) if args.apply else {"id": template_id, "variants": [{"id": "template-variant-preview", "imagePlaceholders": [{"name": "default"}]}]}
-            payload = build_payload(row, config, template, args.fit_method)
-            file_url = f"{config.public_file_base_url}{row.get('gelato_asset_route', '')}"
+                template = (
+                    get_template(template_run.template_id, config, template_cache)
+                    if args.apply or args.live_template_preview
+                    else preview_template_for_row(template_run.template_id, row)
+                )
+                payload, variant_metrics = build_payload(row, config, template, template_run, args.max_crop_per_side)
+                file_url = f"{config.public_file_base_url}{row.get('gelato_asset_route', '')}"
+                if args.debug_variants:
+                    print_variant_debug(row, template_run, variant_metrics)
+                if args.debug_variants_csv:
+                    append_variant_debug_rows(Path(args.debug_variants_csv), row, template_run, variant_metrics)
 
-            if args.apply:
-                response = request_json("POST", f"{config.api_base_url}/stores/{config.store_id}/products:create-from-template", config.api_key, payload)
-                gelato_product_id = str(response.get("id") or response.get("productId") or "")
-                created += 1
+                if args.apply:
+                    response = request_json("POST", f"{config.api_base_url}/stores/{config.store_id}/products:create-from-template", config.api_key, payload)
+                    gelato_product_id = str(response.get("id") or response.get("productId") or "")
+                    created += 1
+                    append_log(
+                        log_path,
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "mode": mode,
+                            "status": "created",
+                            "artwork_id": artwork_id,
+                            "artist_id": artist_id,
+                            "title": title,
+                            "template_id": template_run.template_id,
+                            "file_url": file_url,
+                            "gelato_product_id": gelato_product_id,
+                            "notes": f"profile={template_run.key}",
+                        },
+                    )
+                    print(f"CREATED: {artist_id} / {title} / {template_run.key} -> {gelato_product_id}")
+                else:
+                    created += 1
+                    append_log(
+                        log_path,
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "mode": mode,
+                            "status": "dry_run_ok",
+                            "artwork_id": artwork_id,
+                            "artist_id": artist_id,
+                            "title": title,
+                            "template_id": template_run.template_id,
+                            "file_url": file_url,
+                            "gelato_product_id": "",
+                            "notes": f"profile={template_run.key} | {payload['title']} | variants={len(payload['variants'])}",
+                        },
+                    )
+                    print(f"DRY RUN: {artist_id} / {title} / {template_run.key} -> template {template_run.template_id} / variants={len(payload['variants'])}")
+            except Exception as exc:
+                failed += 1
                 append_log(
                     log_path,
                     {
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "mode": mode,
-                        "status": "created",
+                        "status": "failed",
                         "artwork_id": artwork_id,
                         "artist_id": artist_id,
                         "title": title,
-                        "template_id": template_id,
-                        "file_url": file_url,
-                        "gelato_product_id": gelato_product_id,
-                        "notes": "",
-                    },
-                )
-                print(f"CREATED: {artist_id} / {title} -> {gelato_product_id}")
-            else:
-                created += 1
-                append_log(
-                    log_path,
-                    {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "mode": mode,
-                        "status": "dry_run_ok",
-                        "artwork_id": artwork_id,
-                        "artist_id": artist_id,
-                        "title": title,
-                        "template_id": template_id,
-                        "file_url": file_url,
+                        "template_id": template_run.template_id,
+                        "file_url": "",
                         "gelato_product_id": "",
-                        "notes": payload["title"],
+                        "notes": f"profile={template_run.key} | {exc}",
                     },
                 )
-                print(f"DRY RUN: {artist_id} / {title} -> template {template_id}")
-        except Exception as exc:
-            failed += 1
-            append_log(
-                log_path,
-                {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "mode": mode,
-                    "status": "failed",
-                    "artwork_id": artwork_id,
-                    "artist_id": artist_id,
-                    "title": title,
-                    "template_id": "",
-                    "file_url": "",
-                    "gelato_product_id": "",
-                    "notes": str(exc),
-                },
-            )
-            print(f"FAILED: {artist_id} / {title} -> {exc}", file=sys.stderr)
+                print(f"FAILED: {artist_id} / {title} / {template_run.key} -> {exc}", file=sys.stderr)
 
     print(f"Done. ok={created} skipped={skipped} failed={failed}")
 

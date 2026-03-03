@@ -169,6 +169,11 @@ Wenn du nicht ueber Atlas gehen willst, sondern direkt per API:
 4. Danach muessen diese Dateien unter deiner `GELATO_PUBLIC_FILE_BASE_URL` wirklich oeffentlich erreichbar sein.
 5. Das Script arbeitet sortiert nach `artist_id`, dann `year`, dann `title`.
 6. Produktnamen werden mit Artist-Prefix erzeugt, damit Felix und Luca im Gelato-Backend sauber gruppiert sind.
+7. Varianten werden pro Werk nach Ausrichtung und Seitenverhaeltnis gefiltert, damit nur Posterformate angelegt werden, die das Bild sauber ausfuellen.
+8. Standardregel fuer Poster: kein Weissrand, `fitMethod=slice`, maximal `5%` Beschnitt pro Seite. Das kannst du ueber `--max-crop-per-side` anpassen.
+9. Mehrere Templates in einem Lauf gehen ueber `--template-profile profile=<template-id>`. Vorhandene Profile: `poster`, `framed`, `canvas`, `tshirt`.
+10. Fuer Testlaeufe mit echten Gelato-Varianten statt lokaler Vorschau nutze `--live-template-preview`.
+11. Fuer Format-Debug nutze `--debug-variants` und optional `--debug-variants-csv /tmp/gelato_variant_debug.csv`, um die konkret ausgewaehlten Variantengroessen, Ratios und Crop-Werte zu sehen.
 
 Dry Run:
 
@@ -195,6 +200,36 @@ Echter Lauf mit direkter Template-ID und Domain im Befehl:
 cd kunst-museum
 python3 produkte/create_gelato_products.py --apply --template-id YOUR_TEMPLATE_ID --public-file-base-url https://your-domain.example.com
 ```
+
+Mit explizitem Crop-Limit:
+
+```bash
+cd kunst-museum
+python3 produkte/create_gelato_products.py --apply --template-id YOUR_TEMPLATE_ID --public-file-base-url https://your-domain.example.com --max-crop-per-side 0.05
+```
+
+Testlauf mit 5 unterschiedlich proportionierten Werken fuer mehrere Produkttypen:
+
+```bash
+cd kunst-museum
+python3 produkte/create_gelato_products.py \
+  --sample-diverse 5 \
+  --live-template-preview \
+  --debug-variants \
+  --debug-variants-csv /tmp/gelato_variant_debug.csv \
+  --template-profile poster=6a8e7a46-d1b5-45f7-9866-be20bc9a6b9b \
+  --template-profile framed=7e8ce8d0-0d99-47d7-ab50-0722d2cd6f0a \
+  --template-profile tshirt=6c8479c7-5ab1-4ea7-9b11-3ed5e0c3cb5e \
+  --template-profile canvas=8864d5c0-5e9d-43e1-8af7-5dd849821de2 \
+  --public-file-base-url https://your-domain.example.com
+```
+
+Dabei gilt:
+
+- `poster`, `framed`, `canvas`: Ausrichtung + Seitenverhaeltnis muessen passen, Standard `slice`
+- `framed`: Titel wird als `Kuenstler — Werk Kunstdruck mit Rahmen` gebaut
+- `canvas`: Titel wird als `Kuenstler — Werk Leinwanddruck` gebaut
+- `tshirt`: Titel wird als `Kuenstler — Werk T-Shirt` gebaut, Standard `meet`
 
 Optional nur ein Artist:
 
@@ -241,6 +276,8 @@ Wichtig fuer Gelato API:
 - Fuer API-Produktanlage braucht Gelato eine oeffentlich erreichbare Datei-URL.
 - Laut Gelato-Doku werden fuer Platzhalter-Dateien Formate wie JPG, PNG oder PDF erwartet; deshalb baut das Script zusaetzlich `public/gelato-assets/...` fuer den API-Upload.
 - Deshalb nutzt das Script `GELATO_PUBLIC_FILE_BASE_URL` plus diese erzeugten `public/gelato-assets/...` Dateien.
+- Das Script setzt standardmaessig `fitMethod=slice`, damit Poster ohne weisse Ränder gefuellt werden.
+- Gleichzeitig werden nur Template-Varianten mit passender Orientierung und passendem Ratio an Gelato uebergeben.
 
 Shopify ist im Projekt schon teilweise vorbereitet ueber:
 
