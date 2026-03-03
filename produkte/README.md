@@ -230,6 +230,7 @@ Dabei gilt:
 - `framed`: Titel wird als `Kuenstler — Werk Kunstdruck mit Rahmen` gebaut
 - `canvas`: Titel wird als `Kuenstler — Werk Leinwanddruck` gebaut
 - `tshirt`: Titel wird als `Kuenstler — Werk T-Shirt` gebaut, Standard `meet`
+- Wenn fuer `poster`, `framed` oder `canvas` keine Variante unter dem Crop-Limit liegt, wird jetzt **nichts ausgewaehlt**; das Produkt wird fuer dieses Template dann nicht erzeugt.
 
 Optional nur ein Artist:
 

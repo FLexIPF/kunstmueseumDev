@@ -578,32 +578,9 @@ def select_matching_variants(
             metric.selected = metric.variant_id in selected_ids
         return [variants_by_id[metric.variant_id] for metric in selected_metrics if metric.variant_id in variants_by_id], metrics
 
-    fallback: list[tuple[float, VariantDebugRow]] = []
     for metric in metrics:
-        if metric.variant_id and metric.variant_ratio is not None:
-            fallback.append((metric.ratio_distance, metric))
-    if not fallback:
-        raise RuntimeError(f"Template {template.get('id')} has no usable variants for artwork {row.get('artwork_id')}")
-
-    best_distance = min(distance for distance, _ in fallback)
-    closest_metrics = [
-        metric
-        for distance, variant in fallback
-        if abs(distance - best_distance) <= 0.003
-        for metric in [variant]
-    ]
-    selected_ids = {metric.variant_id for metric in closest_metrics}
-    for metric in metrics:
-        metric.selected = metric.variant_id in selected_ids
-    selected_variants = [
-        variants_by_id[metric.variant_id]
-        for metric in sorted(
-            closest_metrics,
-            key=lambda metric: variant_sort_key(variants_by_id.get(metric.variant_id, {})),
-        )
-        if metric.variant_id in variants_by_id
-    ]
-    return selected_variants, metrics
+        metric.selected = False
+    return [], metrics
 
 
 def select_variants_for_profile(
