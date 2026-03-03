@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/123.0.0.0 Safari/537.36"
 )
+CM_SIZE_PATTERN = re.compile(r"(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)\s*cm", re.IGNORECASE)
 
 
 @dataclass
@@ -63,6 +65,7 @@ class VariantDebugRow:
     crop_per_side: float
     ratio_distance: float
     orientation_match: bool
+    ratio_source: str = "placeholder"
     selected: bool = False
 
 
@@ -462,6 +465,40 @@ def placeholder_ratio(placeholder: dict[str, Any]) -> float | None:
     return float(width) / float(height)
 
 
+def variant_title_dimensions_cm(variant_title: str) -> tuple[float, float] | None:
+    match = CM_SIZE_PATTERN.search(variant_title or "")
+    if not match:
+        return None
+    first = parse_number(match.group(1))
+    second = parse_number(match.group(2))
+    if first is None or second is None or first <= 0 or second <= 0:
+        return None
+    return first, second
+
+
+def variant_ratio_from_title(variant_title: str) -> tuple[float | None, str | None]:
+    dimensions = variant_title_dimensions_cm(variant_title)
+    if not dimensions:
+        return None, None
+    first, second = dimensions
+    title_cf = (variant_title or "").casefold()
+    if abs(first - second) <= 1e-9:
+        return 1.0, "square"
+    if title_cf.startswith("horizontal"):
+        width = max(first, second)
+        height = min(first, second)
+    elif title_cf.startswith("vertical"):
+        width = min(first, second)
+        height = max(first, second)
+    else:
+        width = first
+        height = second
+    if height == 0:
+        return None, None
+    ratio = width / height
+    return ratio, ratio_orientation(ratio)
+
+
 def primary_placeholder(variant: dict[str, Any]) -> dict[str, Any] | None:
     placeholders = variant.get("imagePlaceholders") or []
     best: dict[str, Any] | None = None
@@ -513,8 +550,18 @@ def collect_variant_debug_rows(row: dict[str, str], template: dict[str, Any]) ->
         placeholder = primary_placeholder(variant)
         if not placeholder:
             continue
-        variant_ratio = placeholder_ratio(placeholder)
-        variant_orientation = ratio_orientation(variant_ratio) if variant_ratio is not None else "unknown"
+        variant_title = str(variant.get("title") or "")
+        title_ratio, title_orientation = variant_ratio_from_title(variant_title)
+        placeholder_based_ratio = placeholder_ratio(placeholder)
+        variant_ratio = title_ratio if title_ratio is not None else placeholder_based_ratio
+        variant_orientation = (
+            title_orientation
+            if title_orientation is not None
+            else ratio_orientation(variant_ratio)
+            if variant_ratio is not None
+            else "unknown"
+        )
+        ratio_source = "title" if title_ratio is not None else "placeholder"
         orientation_match = False
         crop_per_side = 1.0
         distance = 999.0
@@ -528,7 +575,7 @@ def collect_variant_debug_rows(row: dict[str, str], template: dict[str, Any]) ->
         metrics.append(
             VariantDebugRow(
                 variant_id=str(variant.get("id") or ""),
-                variant_title=str(variant.get("title") or ""),
+                variant_title=variant_title,
                 placeholder_name=str(placeholder.get("name") or ""),
                 placeholder_width=float(placeholder.get("width") or 0.0),
                 placeholder_height=float(placeholder.get("height") or 0.0),
@@ -537,6 +584,7 @@ def collect_variant_debug_rows(row: dict[str, str], template: dict[str, Any]) ->
                 crop_per_side=crop_per_side,
                 ratio_distance=distance,
                 orientation_match=orientation_match,
+                ratio_source=ratio_source,
             )
         )
     return metrics
@@ -791,6 +839,7 @@ def ensure_variant_debug_log(path: Path) -> None:
                 "placeholder_width",
                 "placeholder_height",
                 "variant_ratio",
+                "ratio_source",
                 "variant_orientation",
                 "crop_per_side",
                 "ratio_distance",
@@ -823,6 +872,7 @@ def append_variant_debug_rows(
                 "placeholder_width",
                 "placeholder_height",
                 "variant_ratio",
+                "ratio_source",
                 "variant_orientation",
                 "crop_per_side",
                 "ratio_distance",
@@ -844,6 +894,7 @@ def append_variant_debug_rows(
                     "placeholder_width": f"{metric.placeholder_width:.4f}",
                     "placeholder_height": f"{metric.placeholder_height:.4f}",
                     "variant_ratio": "" if metric.variant_ratio is None else f"{metric.variant_ratio:.6f}",
+                    "ratio_source": metric.ratio_source,
                     "variant_orientation": metric.variant_orientation,
                     "crop_per_side": f"{metric.crop_per_side:.6f}",
                     "ratio_distance": f"{metric.ratio_distance:.6f}",
@@ -864,7 +915,7 @@ def print_variant_debug(row: dict[str, str], template_run: TemplateRun, metrics:
         print(
             "   "
             f"{metric.variant_title or metric.variant_id} | placeholder={metric.placeholder_width:.0f}x{metric.placeholder_height:.0f} "
-            f"| ratio={ratio_text} | crop/side={metric.crop_per_side * 100:.2f}% | orientation={metric.variant_orientation}"
+            f"| ratio={ratio_text} ({metric.ratio_source}) | crop/side={metric.crop_per_side * 100:.2f}% | orientation={metric.variant_orientation}"
         )
     if len(selected_metrics) > 12:
         print(f"   ... {len(selected_metrics) - 12} more selected variants")
