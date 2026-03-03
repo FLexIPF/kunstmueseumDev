@@ -19,6 +19,11 @@ CSV_PATH = REPO_ROOT / "produkte/gelato_jobs.csv"
 LOG_PATH = REPO_ROOT / "produkte/gelato_created_products.csv"
 ASSET_DIR = REPO_ROOT / "public/gelato-assets"
 API_BASE_URL = "https://ecommerce.gelatoapis.com/v1"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/123.0.0.0 Safari/537.36"
+)
 
 
 @dataclass
@@ -104,8 +109,14 @@ def load_config(args: argparse.Namespace) -> Config:
 def request_json(method: str, url: str, api_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     data = None
     headers = {
-        "Accept": "application/json",
+        "Accept": "application/json, text/plain, */*",
         "X-API-KEY": api_key,
+        "User-Agent": DEFAULT_USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9,de-DE;q=0.8,de;q=0.7",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Origin": "https://dashboard.gelato.com",
+        "Referer": "https://dashboard.gelato.com/",
     }
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
@@ -117,6 +128,11 @@ def request_json(method: str, url: str, api_key: str, payload: dict[str, Any] | 
             return json.loads(raw) if raw else {}
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 403 and ("Cloudflare" in body or "Access denied" in body):
+            raise RuntimeError(
+                f"{method} {url} failed: 403 Cloudflare access block. "
+                "This is likely a bot-signature/IP block, not a bad API key."
+            ) from exc
         raise RuntimeError(f"{method} {url} failed: {exc.code} {body}") from exc
     except error.URLError as exc:
         raise RuntimeError(f"{method} {url} failed: {exc}") from exc
@@ -404,8 +420,17 @@ def main() -> None:
 
     existing_ids: set[str] = set()
     if args.apply and not args.force:
-        products = list_existing_products(config)
-        existing_ids = existing_artwork_ids(products)
+        try:
+            products = list_existing_products(config)
+            existing_ids = existing_artwork_ids(products)
+        except Exception as exc:
+            print(
+                "WARNING: Could not list existing Gelato products. "
+                "Continuing without duplicate check.",
+                file=sys.stderr,
+            )
+            print(f"DETAIL: {exc}", file=sys.stderr)
+            existing_ids = set()
 
     template_cache: dict[str, dict[str, Any]] = {}
     mode = "apply" if args.apply else "dry_run"
