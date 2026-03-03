@@ -484,10 +484,12 @@ def variant_ratio_from_title(variant_title: str) -> tuple[float | None, str | No
     title_cf = (variant_title or "").casefold()
     if abs(first - second) <= 1e-9:
         return 1.0, "square"
-    if title_cf.startswith("horizontal"):
+    has_horizontal = "horizontal" in title_cf
+    has_vertical = "vertical" in title_cf
+    if has_horizontal and not has_vertical:
         width = max(first, second)
         height = min(first, second)
-    elif title_cf.startswith("vertical"):
+    elif has_vertical and not has_horizontal:
         width = min(first, second)
         height = max(first, second)
     else:
