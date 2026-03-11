@@ -175,6 +175,7 @@ Wenn du nicht ueber Atlas gehen willst, sondern direkt per API:
 10. Fuer Testlaeufe mit echten Gelato-Varianten statt lokaler Vorschau nutze `--live-template-preview`.
 11. Fuer Format-Debug nutze `--debug-variants` und optional `--debug-variants-csv /tmp/gelato_variant_debug.csv`, um die konkret ausgewaehlten Variantengroessen, Ratios und Crop-Werte zu sehen.
 12. Bei Postern/Rahmen/Canvas liest das Script die echten `cm`-Masse jetzt bevorzugt aus dem Variantentitel; nur wenn dort nichts Parsebares steht, faellt es auf die Placeholder-Geometrie zurueck.
+13. Wenn `gelato_size_candidates_cm` in `produkte/gelato_jobs.csv` gesetzt ist, werden Poster/Rahmen/Canvas zusaetzlich auf genau diese empfohlenen Groessen eingeschraenkt.
 
 Dry Run:
 

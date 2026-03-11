@@ -65,6 +65,7 @@ class VariantDebugRow:
     crop_per_side: float
     ratio_distance: float
     orientation_match: bool
+    size_candidate_match: bool = True
     ratio_source: str = "placeholder"
     selected: bool = False
 
@@ -476,6 +477,56 @@ def variant_title_dimensions_cm(variant_title: str) -> tuple[float, float] | Non
     return first, second
 
 
+def normalized_dimensions_for_orientation(width: float, height: float, orientation: str | None) -> tuple[float, float]:
+    if orientation == "landscape":
+        return max(width, height), min(width, height)
+    if orientation == "portrait":
+        return min(width, height), max(width, height)
+    return width, height
+
+
+def variant_title_normalized_dimensions_cm(variant_title: str) -> tuple[float, float] | None:
+    dimensions = variant_title_dimensions_cm(variant_title)
+    if not dimensions:
+        return None
+    first, second = dimensions
+    _, orientation = variant_ratio_from_title(variant_title)
+    return normalized_dimensions_for_orientation(first, second, orientation)
+
+
+def parse_size_candidates_cm(raw_value: str, artwork_orientation: str) -> list[tuple[float, float]]:
+    candidates: list[tuple[float, float]] = []
+    for item in (raw_value or "").split("|"):
+        item = item.strip()
+        if not item or "x" not in item:
+            continue
+        raw_width, raw_height = item.split("x", 1)
+        width = parse_number(raw_width)
+        height = parse_number(raw_height)
+        if width is None or height is None or width <= 0 or height <= 0:
+            continue
+        candidates.append(normalized_dimensions_for_orientation(width, height, artwork_orientation))
+    return candidates
+
+
+def size_candidate_matches(row: dict[str, str], variant_title: str) -> bool:
+    raw_candidates = (row.get("gelato_size_candidates_cm") or "").strip()
+    if not raw_candidates:
+        return True
+    variant_dims = variant_title_normalized_dimensions_cm(variant_title)
+    if not variant_dims:
+        return True
+    artwork_orientation = ratio_orientation(artwork_ratio(row))
+    candidates = parse_size_candidates_cm(raw_candidates, artwork_orientation)
+    if not candidates:
+        return True
+    variant_width, variant_height = variant_dims
+    for candidate_width, candidate_height in candidates:
+        if abs(candidate_width - variant_width) <= 1.1 and abs(candidate_height - variant_height) <= 1.1:
+            return True
+    return False
+
+
 def variant_ratio_from_title(variant_title: str) -> tuple[float | None, str | None]:
     dimensions = variant_title_dimensions_cm(variant_title)
     if not dimensions:
@@ -565,6 +616,7 @@ def collect_variant_debug_rows(row: dict[str, str], template: dict[str, Any]) ->
         )
         ratio_source = "title" if title_ratio is not None else "placeholder"
         orientation_match = False
+        size_match = size_candidate_matches(row, variant_title)
         crop_per_side = 1.0
         distance = 999.0
         if variant_ratio is not None:
@@ -586,6 +638,7 @@ def collect_variant_debug_rows(row: dict[str, str], template: dict[str, Any]) ->
                 crop_per_side=crop_per_side,
                 ratio_distance=distance,
                 orientation_match=orientation_match,
+                size_candidate_match=size_match,
                 ratio_source=ratio_source,
             )
         )
@@ -606,7 +659,7 @@ def select_matching_variants(
     candidates: list[tuple[float, float, VariantDebugRow]] = []
 
     for metric in metrics:
-        if not metric.variant_id or metric.variant_ratio is None or not metric.orientation_match:
+        if not metric.variant_id or metric.variant_ratio is None or not metric.orientation_match or not metric.size_candidate_match:
             continue
         if metric.crop_per_side <= max_crop_per_side:
             candidates.append((metric.crop_per_side, metric.ratio_distance, metric))
@@ -843,6 +896,7 @@ def ensure_variant_debug_log(path: Path) -> None:
                 "variant_ratio",
                 "ratio_source",
                 "variant_orientation",
+                "size_candidate_match",
                 "crop_per_side",
                 "ratio_distance",
                 "orientation_match",
@@ -876,6 +930,7 @@ def append_variant_debug_rows(
                 "variant_ratio",
                 "ratio_source",
                 "variant_orientation",
+                "size_candidate_match",
                 "crop_per_side",
                 "ratio_distance",
                 "orientation_match",
@@ -898,6 +953,7 @@ def append_variant_debug_rows(
                     "variant_ratio": "" if metric.variant_ratio is None else f"{metric.variant_ratio:.6f}",
                     "ratio_source": metric.ratio_source,
                     "variant_orientation": metric.variant_orientation,
+                    "size_candidate_match": "yes" if metric.size_candidate_match else "no",
                     "crop_per_side": f"{metric.crop_per_side:.6f}",
                     "ratio_distance": f"{metric.ratio_distance:.6f}",
                     "orientation_match": "yes" if metric.orientation_match else "no",
@@ -917,7 +973,8 @@ def print_variant_debug(row: dict[str, str], template_run: TemplateRun, metrics:
         print(
             "   "
             f"{metric.variant_title or metric.variant_id} | placeholder={metric.placeholder_width:.0f}x{metric.placeholder_height:.0f} "
-            f"| ratio={ratio_text} ({metric.ratio_source}) | crop/side={metric.crop_per_side * 100:.2f}% | orientation={metric.variant_orientation}"
+            f"| ratio={ratio_text} ({metric.ratio_source}) | crop/side={metric.crop_per_side * 100:.2f}% "
+            f"| orientation={metric.variant_orientation} | size-match={'yes' if metric.size_candidate_match else 'no'}"
         )
     if len(selected_metrics) > 12:
         print(f"   ... {len(selected_metrics) - 12} more selected variants")
